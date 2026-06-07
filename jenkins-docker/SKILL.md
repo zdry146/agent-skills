@@ -1,9 +1,87 @@
 ---
 name: jenkins-docker
-description: Use when installing, starting, or managing a Jenkins Docker container that needs to survive host reboots and host docker gid changes, persist state, or run docker/kubectl inside pipelines. Also covers the full E2E setup: aliyun ACR (or any private registry) for image push and minikube as the deploy target for a Maven Java project. Replaces the basic `docker run jenkins` recipe with an idempotent, gid-aware approach.
+description: Use when setting up, validating, or troubleshooting the end-to-end Jenkins + container-registry + Kubernetes environment for CI/CD pipelines that build a Maven Java project, build a Docker image, and deploy to a local cluster. Detects what is already installed on the host and inside Jenkins, prompts before overriding existing state, and lines up Jenkins plugins, credentials, minikube, and a container registry into a working E2E chain. Replaces the basic `docker run jenkins` recipe with an idempotent, gid-aware approach.
 ---
 
-# Jenkins Docker (idempotent + build-agent capable)
+# Jenkins Docker (E2E setup, with detection)
+
+## What this skill does
+
+A working E2E Jenkins pipeline for a Java project needs four pieces wired together:
+
+1. **Jenkins container** with the right plugins and credentials
+2. **minikube** (or another k8s cluster) as the deploy target
+3. **Container registry** (aliyun ACR, GHCR, DockerHub) for the built image
+4. **Agent wiring** — `~/.kube` and `~/.minikube` mounted so `kubectl` inside the container works
+
+Installing any one of them is well-documented. The hard part is making sure all four are present, version-compatible, and using the same credentials. This skill does that as a guided setup: **detect → prompt → apply → verify**. It does not blindly install on top of a working setup.
+
+## Workflow
+
+```
+1. scripts/detect-env.sh         →  inventory of what's already on this host
+                                     (and inside Jenkins, if JENKINS_USER/TOKEN set)
+2. scripts/setup-env.sh          →  per-component prompt: reuse / gap-fill / override / skip
+3. scripts/verify-e2e.sh         →  post-setup smoke test: agent has docker+kubectl,
+                                     Jenkins has plugins+creds, agent reaches minikube
+```
+
+Always run `detect-env.sh` first. Then `setup-env.sh` walks through each component interactively, asking what to do for each. `verify-e2e.sh` prints ✓/✗ for every leg of the chain.
+
+For one-time ops like "just start the Jenkins container", use `scripts/start-jenkins.sh` directly — it's the idempotent, gid-aware `docker run` recipe that the rest of the skill assumes.
+
+## Detection: `scripts/detect-env.sh`
+
+Safe, read-only inventory script. Reports:
+
+- **Host tools**: `docker`, `kubectl`, `minikube` (with running state), `mvn`, `git`
+- **Jenkins container**: presence, http reachability, active plugin count, configured credential IDs
+
+Pass `--json` for machine-readable output (used by `setup-env.sh` and agents that want to act on the inventory programmatically).
+
+```bash
+./scripts/detect-env.sh            # human-readable table
+JENKINS_USER=… JENKINS_TOKEN=… \
+  ./scripts/detect-env.sh --json   # includes plugin + credential inventory
+```
+
+If `JENKINS_USER` / `JENKINS_TOKEN` are not set, the plugin and credential lines will read `(set JENKINS_USER+JENKINS_TOKEN to query)`. Setting them unlocks the gap-fill and override options in `setup-env.sh`.
+
+## Setup: `scripts/setup-env.sh`
+
+Walks through each component (docker, kubectl, minikube, mvn, Jenkins) and prompts:
+
+| Choice | Meaning |
+|---|---|
+| `r` | **Reuse** as-is (skip — already good) |
+| `g` | **Gap-fill** (add only what's missing — e.g. install the plugins you don't have, create the credentials that aren't there). Existing jobs, builds, and credentials are **not** touched. |
+| `o` | **Override** — recreate from scratch. **Destructive.** Requires typing `YES` to confirm. Loses all existing Jenkins jobs, builds, and credentials. |
+| `s` | **Skip** (do nothing) |
+
+Gap-fill is the default for "I have a Jenkins already, just add what I'm missing". It compares the current plugin set and credential IDs against the skill's required baseline and installs/creates only the deltas. Override is the right answer when a Jenkins instance is so stale or mis-configured that rebuilding it is faster than patching it.
+
+After the prompts, the script re-runs detection and prints the new state.
+
+## Verification: `scripts/verify-e2e.sh`
+
+Read-only smoke test. Confirms the chain is actually wired:
+
+- Host has docker / kubectl / minikube / mvn / git
+- minikube is running
+- Jenkins container is present and `http://localhost:8080` is up
+- Required plugins are installed (`git`, `workflow-aggregator`, `credentials`, `credentials-binding`, `docker-workflow`, `pipeline-model-definition`)
+- Required credentials are configured (`git-cred`, `aliyun-docker-login`)
+- The agent inside the container has `docker` and `kubectl` in its PATH
+- The agent's `kubectl` can reach the minikube cluster
+
+Exits 0 if all checks pass, non-zero otherwise. Use it as the gate before declaring the env "ready for a pipeline run".
+
+## Reference docs
+
+Step-by-step setup for the two surrounding pieces. Each starts with a "Detection" step that flows into `setup-env.sh`:
+
+- [`references/aliyun-acr-setup.md`](references/aliyun-acr-setup.md) — create an Aliyun Container Registry, generate access credentials, wire them into Jenkins as `aliyun-docker-login`, and call them from a pipeline.
+- [`references/minikube-setup.md`](references/minikube-setup.md) — install minikube, start it on the host, and mount `~/.minikube` + `~/.kube` into the Jenkins container so `kubectl` inside the agent talks to the same cluster the host sees.
 
 ## Why not just `docker run jenkins`?
 
@@ -13,134 +91,28 @@ Most snippets break in three ways on a real project:
 2. **No socket/binary binds** — agent can't `docker build/push`; CI/CD pipelines fail at the first `docker` step.
 3. **Not idempotent** — re-running the recipe silently creates duplicate containers, or fails outright.
 
-This skill gives you a small, idempotent `start-jenkins.sh` pattern with the run-args that cover the common cases.
-
-## Prerequisites
-
-- Docker on the host
-- A persistent host directory for `JENKINS_HOME` (e.g. `/home/<user>/jenkins_home`)
-- Ports 8080 (UI) and 50000 (JNLP) free
-- For build-agent capabilities: docker, kubectl, and (optionally) a kubeconfig + minikube profile installed on the host
-
-## Run-args reference
-
-| Flag | Why |
-|---|---|
-| `-v $HOST_JENKINS_HOME:/var/jenkins_home` | Persist plugins, jobs, secrets across container recreation |
-| `-p 8080:8080 -p 50000:50000` | Web UI + JNLP agents |
-| `--restart=always` | Survive host reboots |
-| `--group-add $(getent group docker \| cut -d: -f3)` | Let the `jenkins` user in the container talk to the host docker socket — **look up at runtime** |
-| `-v /var/run/docker.sock:/var/run/docker.sock` | (agent) docker-in-docker for builds |
-| `-v /usr/bin/docker:/usr/bin/docker` | (agent) docker CLI binary |
-| `-v /usr/local/bin/kubectl:/usr/local/bin/kubectl:ro` | (agent) kubectl for k8s deploys |
-| `-v $HOME/.kube:/home/jenkins/.kube:ro` | (agent) kube context — read-only |
-| `-v $HOME/.minikube:/home/jenkins/.minikube:ro` | (agent) minikube profile — read-only |
-
-## Idempotency contract
-
-1. Look up the host docker gid **at runtime** (`getent group docker | cut -d: -f3`), not at script-write time.
-2. If the named container exists and its `HostConfig.GroupAdd` contains the current gid → `docker start` and exit.
-3. If the container exists with a stale gid → `docker rm -f` and recreate.
-4. If the container doesn't exist → create it.
-
-Safe to re-run after a host reboot, a host docker gid change, or a manual `docker rm jenkins`.
-
-## Script: `scripts/start-jenkins.sh`
-
-A generalized, drop-in version. Override any of the `HOST_*` / `IMAGE` / `NAME` variables at the top of the file to match your project.
-
-## After the container is up
-
-A fresh Jenkins is blank. Before any pipeline can `credentials('...')`, run `docker build/push`, or check out a Git repo, install the plugin baseline and add the credential baseline below.
-
-Install plugins via **Manage Jenkins → Plugins → Available plugins** (UI), or use the CLI the `lts` image ships at `/usr/bin/jenkins-plugin-cli --plugins <list>`. Reference credentials in pipelines with `credentials('id')` or via `withCredentials { ... }`.
-
-### Plugin baseline
-
-The minimum for a "checkout → build → push image → deploy to k8s" pipeline:
-
-| Category | Plugins |
-|---|---|
-| **Pipeline core** | `pipeline-model-definition` (Declarative), `workflow-aggregator`, `workflow-cps`, `workflow-job`, `workflow-multibranch`, `workflow-scm-step` |
-| **SCM** | `git`, `git-client`, `scm-api` |
-| **Credentials** | `credentials`, `credentials-binding`, `plain-credentials`, `ssh-credentials` |
-| **Scripting** | `script-security` (required for Groovy sandbox; pre-installed with the lts image) |
-| **Docker** | `docker-workflow`, `docker-commons` (needed only if pipelines call `docker.build/push` or hit the docker socket directly) |
-| **GitHub (optional)** | `github`, `github-api`, `github-branch-source`, `pipeline-github-lib` (only for GitHub repos + multibranch) |
-| **UI** | `pipeline-graph-view`, `pipeline-stage-view`, `timestamper`, `ws-cleanup`, `dark-theme` |
-
-A working instance typically resolves to **80–100 active plugins** once transitive dependencies are pulled in. The plugin list at http://`<host>`:8080 → `pluginManager/api/json?depth=1` is the ground truth.
-
-### Credential baseline
-
-Add via **Manage Jenkins → Credentials → System → Global credentials**.
-
-| ID (recommended) | Type | Purpose |
-|---|---|---|
-| `git-cred` | Username with password | SCM checkout (GitHub / GitLab PAT-as-password) |
-| `aliyun-docker-login` | Username with password | Push to a private container registry (Aliyun ACR, GHCR, DockerHub) — username and password are both exposed as `${VAR_USR}` / `${VAR_PSW}` for `docker login -u ... --password-stdin` |
-| `db-password` | Secret text | Database password surfaced as `DB_PASSWORD` to the app |
-| `<kubeconfig>` (optional) | Secret file | A kubeconfig YAML the agent can mount if `~/.kube` isn't enough |
-
-> Why "Username with password" (not "Secret text") for the registry? `docker login` needs a username. A username/password credential binding exposes both, while a Secret text gives you only the password.
-
-Quick check of what's actually configured:
-
-```bash
-curl -s -u "$USER:$TOKEN" "$JENKINS_URL/credentials/api/json?depth=4" | \
-  python3 -c "import json,sys; d=json.load(sys.stdin); \
-  [print(f\"{c['id']:30s} {c.get('typeName','?'):25s} {c.get('displayName','')}\") \
-   for s in d['stores'].values() \
-   for dom in s['domains'].values() \
-   for c in (dom.get('credentials') or [])]"
-```
-
-## End-to-end environment setup
-
-The Jenkins container is the middle of a chain. Two surrounding pieces complete the loop:
-
-1. **Image registry** (Aliyun ACR, GHCR, DockerHub, …) — where the agent `docker push`es the built image.
-2. **Kubernetes cluster** (minikube for local dev, or a real cluster) — the deploy target.
-
-The pipeline shape this skill supports end-to-end:
-
-```
-GitHub repo
-   │  (git-cred)
-   ▼
-Jenkins agent  ──  mvn -B clean verify           ← builds the Maven Java project
-   │             mvn help:evaluate               ← reads project.version
-   │             docker build + docker push      ← pushes to aliyun ACR
-   │                                            (aliyun-docker-login credential)
-   ▼
-Aliyun Container Registry   crpi-XXX.cn-hangzhou.personal.cr.aliyuncs.com/<ns>/<image>:<tag>
-   │  (kubectl set image / kubectl apply, kubelet pulls the image)
-   ▼
-Minikube (or any k8s cluster)
-```
-
-Once the three pieces (Jenkins + registry + cluster) are configured, the pipeline itself is just the standard "checkout → test → image → deploy" shape. The hard part is the environment plumbing, which is what the reference docs cover.
-
-## Reference docs
-
-Step-by-step setup for the two surrounding pieces:
-
-- [`references/aliyun-acr-setup.md`](references/aliyun-acr-setup.md) — create an Aliyun Container Registry, generate access credentials, wire them into Jenkins as `aliyun-docker-login`, and call them from a pipeline.
-- [`references/minikube-setup.md`](references/minikube-setup.md) — install minikube, start it on the host, and mount `~/.minikube` + `~/.kube` into the Jenkins container so `kubectl` inside the agent talks to the same cluster the host sees.
-
-## Common mistakes
-
-- **Hardcoding the docker gid.** If the host's docker gid changes, the container loses socket access. Use the runtime lookup.
-- **Mounting only the socket, not the binary.** Socket present, no CLI → "permission denied" or "executable file not found". Bind both.
-- **Mounting `$HOME/.kube` writable.** A careless agent step can clobber your kubeconfig. Use `:ro`.
-- **Setting `--group-add 999` once and forgetting.** It goes stale; the idempotency check above catches it.
-- **Re-running the snippet on every CI run.** Keep the script; let it decide start vs recreate.
+`scripts/start-jenkins.sh` (used by `setup-env.sh`) handles all three. See its header comments for the gid-resolution and idempotency contract.
 
 ## Useful commands
 
 ```bash
-docker logs -f jenkins            # Watch startup
+docker logs -f jenkins                                          # Watch startup
 docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword  # First-run password
-docker exec -u root jenkins bash  # Debug as root inside
-docker rm -f jenkins && start-jenkins.sh   # Full reset
+docker exec -u root jenkins bash                                # Debug as root inside
+
+./scripts/detect-env.sh                                         # What's installed
+JENKINS_USER=… JENKINS_TOKEN=… ./scripts/detect-env.sh --json   # Same, with Jenkins internals
+./scripts/setup-env.sh                                          # Interactive setup
+./scripts/verify-e2e.sh                                         # Smoke test
+JENKINS_USER=… JENKINS_TOKEN=… ./scripts/verify-e2e.sh          # Smoke test with credential checks
 ```
+
+## Common mistakes
+
+- **Skipping detection.** Installing on top of a stale Jenkins wastes time and can clobber state. Always `detect-env.sh` first.
+- **Choosing "override" reflexively.** It destroys every job, build, and credential. Use "gap-fill" unless the instance is genuinely broken.
+- **Hardcoding the docker gid.** If the host's docker gid changes, the container loses socket access. `start-jenkins.sh` looks it up at runtime.
+- **Mounting only the docker socket, not the binary.** Socket present, no CLI → "permission denied" or "executable file not found". Bind both.
+- **Mounting `$HOME/.kube` writable.** A careless agent step can clobber your kubeconfig. Use `:ro`.
+- **Forgetting to set `JENKINS_USER` + `JENKINS_TOKEN` before setup-env.sh.** Without them, the wizard can't query or create Jenkins credentials and the gap-fill option is unavailable.
+- **Treating verify-e2e.sh as optional.** It catches the most common "I forgot to mount X" or "I never added credential Y" mistakes before a 5-minute pipeline build fails.

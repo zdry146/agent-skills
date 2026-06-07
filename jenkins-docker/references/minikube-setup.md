@@ -1,5 +1,23 @@
 # Minikube setup for Jenkins pipeline deploys
 
+## Detection (do this first)
+
+Before installing or starting anything, run the skill's detection script:
+
+```bash
+./scripts/detect-env.sh
+```
+
+Look for the `minikube` line. Three states:
+
+| State | Meaning | Action |
+|---|---|---|
+| `minikube: not installed` | Need to install | Continue with this doc |
+| `minikube: <version>` + `running: no` | Installed but not started | `minikube start --driver=docker`, then re-run detection |
+| `minikube: <version>` + `running: yes (driver=…)` | Already running | Skip the install section; jump to "Give the Jenkins agent access" |
+
+The `setup-env.sh` wizard handles all three paths interactively; this doc is the manual reference.
+
 ## What it is
 
 A single-node Kubernetes cluster running in a Docker container (or VM) on your host. For local CI/CD, it's the typical "deploy target" — the agent runs `kubectl apply` against it the same way it would against a real cluster.

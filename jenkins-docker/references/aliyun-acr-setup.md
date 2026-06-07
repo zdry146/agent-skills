@@ -1,5 +1,15 @@
 # Aliyun Container Registry (ACR) setup for Jenkins pipelines
 
+## Detection (do this first)
+
+Before creating anything, run the skill's detection script to see what's already in place:
+
+```bash
+JENKINS_USER=… JENKINS_TOKEN=… ./scripts/detect-env.sh
+```
+
+Look for the `credentials` line under "Jenkins container". If `aliyun-docker-login` is already listed, you can **skip this entire document** — the credential is already wired. If it's missing, the `setup-env.sh` wizard's "gap-fill" option will add it for you; this doc explains what's happening under the hood.
+
 ## What it is
 
 Aliyun's managed Docker registry. The **personal edition** is free and is what the typical CI/CD pipeline on this skill uses. The agent `docker push`es built images here; minikube (or any k8s cluster) pulls from here on `kubectl apply`.
