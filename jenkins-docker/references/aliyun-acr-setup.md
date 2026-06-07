@@ -8,7 +8,7 @@ Aliyun's managed Docker registry. The **personal edition** is free and is what t
 
 1. Open https://cr.console.aliyun.com/
 2. Pick a region (e.g. `cn-hangzhou`). Match the region to where minikube/your cluster runs to keep the pull path short.
-3. **Namespaces** → create one (e.g. `mike-docker-registry`). This becomes the second path segment in the image name.
+3. **Namespaces** → create one (e.g. `example-docker-registry`). This becomes the second path segment in the image name.
 4. **Instances** → create a **personal** registry instance in that region.
 5. The registry endpoint looks like `crpi-<id>.cn-hangzhou.personal.cr.aliyuncs.com`. The `<id>` is shown in the instance details.
 
@@ -17,7 +17,7 @@ Aliyun's managed Docker registry. The **personal edition** is free and is what t
 In the registry console → **访问凭证** (Access Credentials) → set a fixed password.
 
 You'll get:
-- **Username** — your aliyun account name (e.g. `zdry146`).
+- **Username** — your aliyun account name (e.g. `your-username`).
 - **Password** — the fixed password you just set (not your aliyun login password).
 
 ## Add the credential to Jenkins
@@ -39,7 +39,7 @@ Why "Username with password" (not "Secret text")? A username/password credential
 ```groovy
 environment {
     ALIYUN_REGISTRY  = 'crpi-XXXXX.cn-hangzhou.personal.cr.aliyuncs.com'
-    ALIYUN_NAMESPACE = 'mike-docker-registry'
+    ALIYUN_NAMESPACE = 'example-docker-registry'
     ALIYUN_IMAGE     = 'myapp'
     FULL_IMAGE       = "${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${ALIYUN_IMAGE}"
     ALIYUN_DOCKER_CREDS = credentials('aliyun-docker-login')
@@ -72,12 +72,12 @@ The same `<image>:<tag>` must appear in three places — `docker build`, `docker
 
 ```bash
 # log in
-echo "$AL_PASS" | docker login crpi-XXXXX.cn-hangzhou.personal.cr.aliyuncs.com -u zdry146 --password-stdin
+echo "$AL_PASS" | docker login crpi-XXXXX.cn-hangzhou.personal.cr.aliyuncs.com -u your-username --password-stdin
 
 # push something tiny to confirm the credential works
 docker pull hello-world
-docker tag hello-world crpi-XXXXX.cn-hangzhou.personal.cr.aliyuncs.com/mike-docker-registry/hello-world:test
-docker push crpi-XXXXX.cn-hangzhou.personal.cr.aliyuncs.com/mike-docker-registry/hello-world:test
+docker tag hello-world crpi-XXXXX.cn-hangzhou.personal.cr.aliyuncs.com/example-docker-registry/hello-world:test
+docker push crpi-XXXXX.cn-hangzhou.personal.cr.aliyuncs.com/example-docker-registry/hello-world:test
 ```
 
 If this works from the host, the same credential in Jenkins will work for the agent.

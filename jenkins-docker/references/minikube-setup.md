@@ -74,7 +74,7 @@ For the typical pipeline flow this skill supports (build → push to ACR → `ku
 spec:
   containers:
     - name: app
-      image: crpi-XXXXX.cn-hangzhou.personal.cr.aliyuncs.com/mike-docker-registry/myapp:1.0.0
+      image: crpi-XXXXX.cn-hangzhou.personal.cr.aliyuncs.com/example-docker-registry/myapp:1.0.0
 ```
 
 ## Useful commands
