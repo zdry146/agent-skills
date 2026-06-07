@@ -1,6 +1,6 @@
 ---
 name: jenkins-docker
-description: Use when installing, starting, or managing a Jenkins Docker container that needs to survive host reboots and host docker gid changes, persist state, or run docker/kubectl inside pipelines. Replaces the basic `docker run jenkins` recipe with an idempotent, gid-aware approach.
+description: Use when installing, starting, or managing a Jenkins Docker container that needs to survive host reboots and host docker gid changes, persist state, or run docker/kubectl inside pipelines. Also covers the full E2E setup: aliyun ACR (or any private registry) for image push and minikube as the deploy target for a Maven Java project. Replaces the basic `docker run jenkins` recipe with an idempotent, gid-aware approach.
 ---
 
 # Jenkins Docker (idempotent + build-agent capable)
@@ -94,6 +94,39 @@ curl -s -u "$USER:$TOKEN" "$JENKINS_URL/credentials/api/json?depth=4" | \
    for dom in s['domains'].values() \
    for c in (dom.get('credentials') or [])]"
 ```
+
+## End-to-end environment setup
+
+The Jenkins container is the middle of a chain. Two surrounding pieces complete the loop:
+
+1. **Image registry** (Aliyun ACR, GHCR, DockerHub, …) — where the agent `docker push`es the built image.
+2. **Kubernetes cluster** (minikube for local dev, or a real cluster) — the deploy target.
+
+The pipeline shape this skill supports end-to-end:
+
+```
+GitHub repo
+   │  (git-cred)
+   ▼
+Jenkins agent  ──  mvn -B clean verify           ← builds the Maven Java project
+   │             mvn help:evaluate               ← reads project.version
+   │             docker build + docker push      ← pushes to aliyun ACR
+   │                                            (aliyun-docker-login credential)
+   ▼
+Aliyun Container Registry   crpi-XXX.cn-hangzhou.personal.cr.aliyuncs.com/<ns>/<image>:<tag>
+   │  (kubectl set image / kubectl apply, kubelet pulls the image)
+   ▼
+Minikube (or any k8s cluster)
+```
+
+Once the three pieces (Jenkins + registry + cluster) are configured, the pipeline itself is just the standard "checkout → test → image → deploy" shape. The hard part is the environment plumbing, which is what the reference docs cover.
+
+## Reference docs
+
+Step-by-step setup for the two surrounding pieces:
+
+- [`references/aliyun-acr-setup.md`](references/aliyun-acr-setup.md) — create an Aliyun Container Registry, generate access credentials, wire them into Jenkins as `aliyun-docker-login`, and call them from a pipeline.
+- [`references/minikube-setup.md`](references/minikube-setup.md) — install minikube, start it on the host, and mount `~/.minikube` + `~/.kube` into the Jenkins container so `kubectl` inside the agent talks to the same cluster the host sees.
 
 ## Common mistakes
 
