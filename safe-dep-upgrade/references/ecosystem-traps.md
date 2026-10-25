@@ -79,6 +79,9 @@ git diff --stat
 | Logback 1.4 / Log4j 2.17+ | mitigates Log4Shell-style CVEs |
 | SnakeYAML 2.0 | no longer supports arbitrary type construction by default (a security tightening) and can break YAML parsing |
 | Netty version alignment | split transitive Netty versions must be managed explicitly |
+| Boot 4 modular starters | Jackson is **no longer** in the default `spring-boot-starter` → add `spring-boot-starter-json` explicitly, otherwise `RestTemplate` has no JSON message converter and throws `UnknownContentTypeException` |
+| Boot 4 BOM dropped `spring-retry` | no version is inherited any more → pin it explicitly (`2.0.13`); there is no `spring-boot-starter-retry` artifact to switch to |
+| Boot 4 health API move | `org.springframework.boot.actuate.health.{Health,HealthIndicator,Status}` → `org.springframework.boot.health.contributor.*` (extracted into the separate `spring-boot-health` module) |
 
 ## Kotlin / Gradle Traps
 
