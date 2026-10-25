@@ -81,6 +81,7 @@ git diff --stat
 | Netty version alignment | split transitive Netty versions must be managed explicitly |
 | Boot 4 modular starters | Jackson is **no longer** in the default `spring-boot-starter` → add `spring-boot-starter-json` explicitly, otherwise `RestTemplate` has no JSON message converter and throws `UnknownContentTypeException` |
 | Boot 4 BOM dropped `spring-retry` | no version is inherited any more → pin it explicitly (`2.0.13`); there is no `spring-boot-starter-retry` artifact to switch to |
+| Boot 4.1.1 jackson gap | the 4.1.1 BOM ships jackson 3.1.5, below the 3.1.7 fix threshold (CVE-2026-91776) → import `tools.jackson:jackson-bom:3.1.7` explicitly. Jackson 3 lives under the `tools.jackson` groupId; `com.fasterxml:jackson-bom:3.1.7` does not exist (that is the Jackson 2 line, which 4.1.1 ships at 2.21.5) |
 | Boot 4 health API move | `org.springframework.boot.actuate.health.{Health,HealthIndicator,Status}` → `org.springframework.boot.health.contributor.*` (extracted into the separate `spring-boot-health` module) |
 
 ## Kotlin / Gradle Traps
