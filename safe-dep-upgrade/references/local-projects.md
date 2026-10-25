@@ -1,39 +1,39 @@
-# 项目清单模板与排除规则
+# Project Inventory Template and Exclusion Rules
 
-> 这是一份**模板**，不是某台机器的清单。执行阶段 0 时先按下面的方法扫描你自己的
-> 代码库，再把扫描结果填进「项目清单」表——不要照抄示例里的路径。
+> This is a **template**, not one machine's inventory. During Phase 0, scan your own
+> codebase first, then fill in the "Project Inventory" table below — do not copy the
+> example paths verbatim.
 
-核对日期：<扫描日期>。仍以执行时实际扫描结果为准。
+Verified on: <scan date>. Always defer to the actual scan result at execution time.
 
-## 范围
+## Scope
 
-仅 `<WORKSPACE_ROOT>` 及其子目录（`WORKSPACE_ROOT` = 本次任务指定的代码库根目录）。
+Only `<WORKSPACE_ROOT>` and its subdirectories (`WORKSPACE_ROOT` = the codebase root for this task).
 
-## 项目清单
+## Project Inventory
 
-| 路径（相对 `<WORKSPACE_ROOT>`）| 类型 | 测试栈 | 备注 |
+| Path (relative to `<WORKSPACE_ROOT>`) | Type | Test stack | Notes |
 |---|---|---|---|
-| `<项目目录>` | Maven / Spring Boot | spring-boot-starter-test | 测试文件 N 个 |
-| `<项目目录>/<前端子目录>` | npm / React + Vite + TS | @playwright/test | node_modules 未装，先 `npm ci` |
-| `<项目目录>` | Gradle (KTS) / Kotlin | junit-jupiter + mockk + assertj | 可加 `apiCheck` 锁公开 API |
-| `<项目目录>` | npm / API 契约测试 | Jest + spectral + contract | node_modules 未装，先 `npm ci` |
+| `<project-dir>` | Maven / Spring Boot | spring-boot-starter-test | N test files |
+| `<project-dir>/<frontend-dir>` | npm / React + Vite + TS | @playwright/test | node_modules not installed yet — run `npm ci` first |
+| `<project-dir>` | Gradle (KTS) / Kotlin | junit-jupiter + mockk + assertj | consider adding `apiCheck` to pin the public API |
+| `<project-dir>` | npm / API contract tests | Jest + spectral + contract | node_modules not installed yet — run `npm ci` first |
 
-## 工具链基线
+## Toolchain Baseline
 
-JDK <版本>、Node <版本>、Maven <版本>、Gradle 以各项目 wrapper 版本为准。
+JDK <version>, Node <version>, Maven <version>; Gradle follows each project's own wrapper version.
 
-## 开工前必做
+## Before Starting
 
-对 `node_modules` 未装的项目先 `npm ci`（不要 `npm install`，会污染 lockfile），再跑基线。
+For every project whose `node_modules` is not installed, run `npm ci` (not `npm install` — that mutates the lockfile), then establish the baseline.
 
-## 排除规则
+## Exclusion Rules
 
-- 不在 `<WORKSPACE_ROOT>` 范围内的所有路径：其他 checkout 目录、agent/编辑器配置目录、
-  缓存目录（`~/.cache/`、`~/.npm/`、`~/.local/share/`、`snap/` 等）
-- 路径含 `node_modules/`、`target/`、`build/`、`dist/`、`.git/`、`.gradle/`、`.venv/`、`site-packages/`
-- 工具自身的 `package.json`（eslint、tsup、openclaw 插件、Claude Code 扩展等）
-- agent 工具的配置目录（如 `.opencode/`、`.claude/`）——不是业务项目
+- Every path outside `<WORKSPACE_ROOT>`: other checkouts, agent/editor config directories, and cache directories (`~/.cache/`, `~/.npm/`, `~/.local/share/`, `snap/`, and similar)
+- Any path containing `node_modules/`, `target/`, `build/`, `dist/`, `.git/`, `.gradle/`, `.venv/`, `site-packages/`
+- The tooling's own `package.json` (eslint, tsup, openclaw plugins, Claude Code extensions, and similar)
+- Agent tool config directories (such as `.opencode/` and `.claude/`) — these are not business projects
 
-## 已知薄弱项目
+## Known-Thin Projects
 
-测试文件只有 1-2 个的项目覆盖很薄，阶段 4 的 characterization test 工作量最大，优先处理。
+Projects with only 1-2 test files have very thin coverage, so the Phase 4 characterization-test work is the largest there — handle them first.

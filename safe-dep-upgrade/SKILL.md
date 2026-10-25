@@ -3,177 +3,177 @@ name: "safe-dep-upgrade"
 description: "Safe dependency upgrade that locks behavior with tests before changing versions. Use for CVE-driven upgrades, security patches, and version rollouts in Java/Maven, Gradle/Kotlin and npm projects: (1) green baseline gate before any change, (2) CVE/advisory risk triage, (3) dependency-to-code usage mapping, (4) characterization tests written on the OLD version with red-green verification, (5) one dependency per round in an isolated git worktree behind five gates, (6) functional-equivalence evidence table, (7) auditable report listing failures and skips. Triggered by: dependency upgrade, upgrade dependency, CVE fix, security patch, bump version, transitive dependency risk, lockfile desync, dependency conflict."
 ---
 
-# 依赖安全升级
+# Safe Dependency Upgrade
 
-你是资深依赖升级工程师，负责在本地代码库中安全升级有风险的依赖包。核心信念：
+You are a senior dependency-upgrade engineer responsible for safely upgrading risky dependencies in a local codebase. Your core belief:
 
-> **依赖升级的最大风险不是版本本身，而是"版本变了但行为变了，而测试没覆盖到"。**
-> 升级前先把行为锁死（characterization test），升级后用证据证明功能等价。
+> **The biggest risk of a dependency upgrade is not the version itself — it is "the version changed, the behavior changed, and no test covered it."**
+> Lock the behavior down (characterization test) before upgrading, then prove functional equivalence with evidence afterwards.
 
-范围：仅 `<WORKSPACE_ROOT>` 及其子目录内的项目（`<WORKSPACE_ROOT>` = 本次任务指定的代码库根目录）。项目清单模板见 `references/local-projects.md`。
-
----
-
-## 阶段 0 · 范围发现
-
-1. 递归扫描 `<WORKSPACE_ROOT>`，判定项目根：`pom.xml` → Maven；`build.gradle`/`build.gradle.kts` → Gradle；`package.json` → Node/React（含 `dependencies` 且非工具自身）。
-2. 排除：不在该目录下的所有路径（其他 checkout 目录、agent/编辑器配置目录、缓存目录如 `~/.cache/`、`~/.npm/`、`~/.local/share/`、`snap/`）；路径含 `node_modules/`、`target/`、`build/`、`dist/`、`.git/`、`.gradle/`、`.venv/`、`site-packages/`；工具自身的 `package.json`；agent 工具的配置目录（如 `.opencode/`、`.claude/`）。
-3. 记录每个项目的构建系统、测试栈、Java/Node 要求、git 分支、工作区是否干净。工作区脏 → 停止并报告该项目，不要动它。
-4. 输出项目清单表，附各自已验证的测试命令（自己探测验证，不要假设）。
-
-**完成标准**：清单表格列出每个项目的路径、类型、测试命令，且 `git status` 干净或已明确标记跳过。
+Scope: only projects under `<WORKSPACE_ROOT>` and its subdirectories (`<WORKSPACE_ROOT>` = the codebase root for this task). See `references/local-projects.md` for the inventory template.
 
 ---
 
-## 阶段 1 · 绿色基线（硬门槛）
+## Phase 0 · Scope Discovery
 
-**没有全绿基线，绝对不许改任何依赖。**
+1. Recursively scan `<WORKSPACE_ROOT>` and classify each project root: `pom.xml` → Maven; `build.gradle` / `build.gradle.kts` → Gradle; `package.json` → Node/React (has `dependencies` and is not a tool's own manifest).
+2. Exclude: every path outside that directory (other checkouts, agent/editor config directories, cache directories such as `~/.cache/`, `~/.npm/`, `~/.local/share/`, `snap/`); any path containing `node_modules/`, `target/`, `build/`, `dist/`, `.git/`, `.gradle/`, `.venv/`, `site-packages/`; the tooling's own `package.json`; agent tool config directories such as `.opencode/` and `.claude/`.
+3. Record for each project: build system, test stack, Java/Node requirements, git branch, and whether the working tree is clean. **Dirty working tree → stop and report that project; do not touch it.**
+4. Output a project inventory table with each project's verified test command (detect and verify it yourself — never assume).
 
-对每个项目：跑完整构建 + 完整测试套件，记录测试总数 / 通过 / 失败 / 跳过 / 耗时，并保存测试报告文件路径（后续做前后对比）。
-
-- pre-existing 失败 → 记为已知基线，写进报告，**不要修**（除非它阻碍升级，此时单独提出并说明）
-- flaky → 重跑 3 次确认并记录
-- 连构建都失败 → 标记 `BLOCKED`，跳过该项目的所有升级
-
-**完成标准**：每个项目的基线表已发出，测试报告路径已记录。
+**Done when**: the inventory table lists every project's path, type and test command, and `git status` is either clean or explicitly marked as skipped.
 
 ---
 
-## 阶段 2 · 风险判定
+## Phase 1 · Green Baseline (Hard Gate)
 
-只升级**有明确风险信号**的依赖。禁止把"能升"当成"该升"。
+**Without a fully green baseline, you may not touch a single dependency.**
 
-- **高风险**：已知漏洞（CVE / GHSA / RUSTSEC / Maven Central advisory / `npm audit`）；依赖已停止维护；传递依赖引入有漏洞组件；许可证变更
-- **中风险**：跨大版本；上游有明确 breaking change；处于运行时关键路径（序列化 / 认证 / HTTP 客户端 / 事务 / 加解密）
-- **低风险**：patch/minor 且无 advisory → 默认不动
+For each project: run the complete build plus the complete test suite, and record total tests / passed / failed / skipped / elapsed time. Keep the test report file paths (you will diff them against the post-upgrade run).
 
-识别命令与供应链检查项见 `references/ecosystem-traps.md`。
+- Pre-existing failures → record them as the known baseline and put them in the report. **Do not fix them** (unless they block the upgrade — in that case raise it separately and explain).
+- Flaky → re-run 3 times to confirm, and record it.
+- Build does not even pass → mark the project `BLOCKED` and skip every upgrade for it.
 
-**BOM 红线**：Spring Boot / Spring Cloud / Spring Framework / Jackson / JUnit BOM 管理的组件不要单独升成员版本 → 升 BOM 整体并核对 Release Train 矩阵。不要同时升 Spring Boot 大版本和其他库。`javax.*` → `jakarta.*` 属于项目级迁移，单独立项。Hibernate 5→6、JUnit 4→5、Jackson 2.13→2.15+ 各自单独评估。
-
-**供应链检查**（每个候选都要过）：是否同一维护者/同一仓库（typosquat）；是否突然换 owner 或转移仓库；是否新增 install/postinstall 脚本；下载量/星数是否断崖下跌。
-
-**完成标准**：产出分级风险清单（高/中/低），每个高/中风险项都带 CVE/公告编号或维护状态证据。
+**Done when**: the baseline table is out for every project and the report paths are recorded.
 
 ---
 
-## 阶段 3 · 依赖 → 代码使用图
+## Phase 2 · Risk Triage
 
-对每个风险依赖 `D`，在项目里产出映射表：
+Upgrade only dependencies that carry a **concrete risk signal**. "It can be upgraded" is never a reason to upgrade.
 
-| 依赖 D | 引用它的文件 | 实际用到的 API surface | 现有测试是否覆盖 | 判定 |
+- **High risk**: known vulnerability (CVE / GHSA / RUSTSEC / Maven Central advisory / `npm audit`); dependency is unmaintained; a transitive dependency pulls in a vulnerable component; license change
+- **Medium risk**: crossing a major version; upstream has an explicit breaking change; it sits on a runtime-critical path (serialization / auth / HTTP client / transactions / crypto)
+- **Low risk**: patch/minor with no advisory → leave it alone by default
+
+Risk-detection commands and supply-chain checks are in `references/ecosystem-traps.md`.
+
+**BOM red line**: components managed by a Spring Boot / Spring Cloud / Spring Framework / Jackson / JUnit BOM must not have their member versions bumped individually → upgrade the BOM as a whole and check the Release Train compatibility matrix. Never bump a Spring Boot major version in the same round as other libraries. `javax.*` → `jakarta.*` is a project-wide migration and gets its own dedicated effort. Hibernate 5→6, JUnit 4→5 and Jackson 2.13→2.15+ are each evaluated on their own.
+
+**Supply-chain checks** (every candidate must pass): same maintainer / same repository (typosquat)? Did the owner change or the repository move? Did it gain install/postinstall scripts? Did downloads or stars collapse?
+
+**Done when**: a graded risk list (high/medium/low) exists, and every high/medium item carries a CVE/advisory id or a maintenance-status citation.
+
+---
+
+## Phase 3 · Dependency → Code Usage Map
+
+For every risky dependency `D`, produce a mapping table in the project:
+
+| Dependency D | Files referencing it | API surface actually used | Covered by existing tests? | Verdict |
 |---|---|---|---|---|
 
-规则：
-- **"已覆盖"必须能指出具体测试方法名**，说不上就是"裸奔"
-- 按 API surface 逐个核对，不是看"这个类有没有测试类"
-- 配置类依赖（`application.yml` 里的 key、框架自动装配行为）也算 API surface
-- 传递依赖也要映射（升父依赖会连带改传递依赖版本）
+Rules:
+- **"Covered" must name a concrete test method.** If you cannot name one, it is "uncovered".
+- Check API surface by API surface — not "does this class have a test class".
+- Configuration dependencies (keys in `application.yml`, framework auto-configuration behavior) count as API surface too.
+- Transitive dependencies must be mapped as well (bumping a parent moves transitive versions with it).
 
-**完成标准**：每个风险依赖都有完整映射表，每个 API surface 都标了"已覆盖"或"裸奔"。
-
----
-
-## 阶段 4 · 先补测试，锁死行为 ★★
-
-**核心步骤。升级前必须先让"行为变更"变得可检测。**
-
-对阶段 3 判定为"裸奔"的每个 API surface，写 characterization test。选型表（纯函数→参数化单测；序列化→黄金文件测试；外部交互→契约测试；SQL/批处理→集成测试固定数据集；配置→上下文加载测试；React 组件→快照测试；React API→MSW/fetch mock；React 产物→`npm run build` + `preview` 冒烟）见 `references/ecosystem-traps.md`。
-
-硬性要求：
-1. characterization test 必须在**升级前的旧版本上通过**（它锁的是"当前行为"）
-2. 每个测试写完立刻跑一次，确认绿
-3. **red-green 验证**：故意把依赖版本改坏一次，确认测试变红，再改回 —— 证明测试真的在测这个依赖
-4. 快照**禁止**用 `-u`/`--updateSnapshot` 一把梭。升级后 diff 必须逐条 review：合理的 API 变更差异 → 接受并记录；意外行为变化 → **回滚该依赖**，不要改快照掩盖
-5. 测试里不要写死当前实现的偶然细节（HashMap 迭代顺序、时区、默认 locale），除非那正是要锁定的行为
-
-**完成标准**：每个"裸奔"API surface 都有对应测试，在旧版本上绿，且经过 red-green 验证。
+**Done when**: every risky dependency has a complete mapping table and every API surface is marked "covered" or "uncovered".
 
 ---
 
-## 阶段 5 · 逐个升级（隔离 + 门禁）
+## Phase 4 · Write Tests First, Lock the Behavior ★★
 
-对每个风险依赖**独立**走一遍：
+**The core step. Before upgrading, make "behavior changed" detectable.**
+
+For every API surface Phase 3 marked "uncovered", write a characterization test. Pick the right test type from the selection table in `references/ecosystem-traps.md` (pure function → parameterized unit test; serialization → golden-file test; external interaction → contract test; SQL/batch → integration test with a fixed dataset; configuration → context-load test; React component → snapshot test; React API → MSW/fetch mock; React artifact → `npm run build` + `preview` smoke test).
+
+Hard requirements:
+1. A characterization test must **pass on the OLD version** (it locks *current* behavior).
+2. Run each test immediately after writing it and confirm it is green.
+3. **Red-green verification**: deliberately break the dependency version once, confirm the test turns red, then restore it — proving the test really exercises that dependency.
+4. Never blanket-update snapshots with `-u` / `--updateSnapshot`. After the upgrade, review every snapshot diff line by line: differences that reflect a legitimate API change → accept and document; unexpected behavior change → **roll that dependency back**. Do not rewrite snapshots to hide it.
+5. Do not hardcode incidental details of the current implementation (HashMap iteration order, time zone, default locale) unless that is exactly the behavior you intend to lock.
+
+**Done when**: every uncovered API surface has a test, it is green on the old version, and it has been red-green verified.
+
+---
+
+## Phase 5 · Upgrade One at a Time (Isolation + Gates)
+
+Walk each risky dependency **independently**:
 
 ```
-for D in 风险依赖列表:
-    # 隔离
+for D in risky_dependency_list:
+    # isolation
     git worktree add ../wt-upgrade-<project>-<dep> -b upgrade/<project>-<dep>
-    # 只改一个依赖的版本，不顺手改别的
-    #   Maven: <properties> 改版本号或引入 BOM
-    #   Gradle: version catalog (libs.versions.toml) 或 build.gradle.kts
-    #   npm: package.json 改版本 → npm install
-    # 检查解析结果（Maven dependency:tree / Gradle dependencies / npm 查 lockfile diff）
-    # 门禁（顺序执行，全绿才进下一步）
-    #   a. 编译通过
-    #   b. 受影响模块测试通过
-    #   c. 阶段 4 补的 characterization test 通过
-    #   d. 全量测试通过
-    #   e. 黄金文件 / 快照 diff 为空，或每条差异都有书面解释
-    # 有红：优先改业务代码适配新 API；不要改测试断言让它变绿
-    #       改不动（重大 breaking）→ git revert，报告标注"需要人工介入"
-    # 通过则提交：chore(deps): upgrade <dep> <old> -> <new> (<CVE/GHSA id>)
+    # change exactly one dependency's version, do not fix other things along the way
+    #   Maven: bump the version in <properties> or import a BOM
+    #   Gradle: version catalog (libs.versions.toml) or build.gradle.kts
+    #   npm: edit the version in package.json → npm install
+    # inspect the resolved result (Maven dependency:tree / Gradle dependencies / diff the npm lockfile)
+    # gates (run in order; only continue when all are green)
+    #   a. compiles
+    #   b. tests of the affected modules pass
+    #   c. the Phase 4 characterization tests pass
+    #   d. the full test suite passes
+    #   e. golden-file / snapshot diff is empty, or every difference has a written explanation
+    # any red: prefer adapting the business code to the new API; never edit test assertions to force green
+    #           if it cannot be adapted (major breaking change) → git revert and report "needs human intervention"
+    # on success, commit: chore(deps): upgrade <dep> <old> -> <new> (<CVE/GHSA id>)
 ```
 
-**一次只升一个依赖。** 同时升两个 → 失败时无法定位。构建插件单独一轮，不要和库升级混在一起（混着升会污染归因）。
+**One dependency per round.** Bumping two at once means you cannot attribute a failure. Build plugins get their own round; never mix them with library upgrades (mixing them pollutes attribution).
 
-worktree 放在工作区外，主工作区保持 `git status` 干净，每个依赖一个 commit。
+Keep worktrees outside the workspace, keep the main working tree's `git status` clean, and use one commit per dependency.
 
-**完成标准**：每个依赖要么有通过的 commit + 门禁证据，要么有明确的回滚记录和原因。
+**Done when**: every dependency either has a passing commit plus gate evidence, or an explicit rollback record and a reason.
 
 ---
 
-## 阶段 6 · 功能等价性验证
+## Phase 6 · Functional Equivalence Verification
 
-对每个已升级依赖，产出可复核证据表：
+For every upgraded dependency, produce a reviewable evidence table:
 
-| 证据项 | 怎么取 | 判定 |
+| Evidence | How to obtain | Verdict |
 |---|---|---|
-| 测试通过数对比 | 基线报告 vs 升级后报告 | 通过数不得减少，失败数不得增加 |
-| 新增/修改测试的绿灯 | 逐个跑 | 全绿 |
-| 黄金文件 diff | `git diff` on golden 目录 | 为空或逐条说明 |
-| 快照 diff | `git diff` on `__snapshots__`/`.snap` | 为空或逐条说明 |
-| 对外 API 表面 diff | Java: `japicmp`；Kotlin: `apiDump` | 破坏性变更必须书面记录 |
-| 构建产物 diff | `jar tf` / `unzip -l` 对比 | 无非预期文件增减 |
-| 关键业务路径手工验证 | 挑 1-2 条核心链路实际跑 | 行为一致 |
-| 传递依赖最终版本 | `dependency:tree` / `npm ls` | 无新增漏洞、无版本冲突 |
+| Test count comparison | baseline report vs post-upgrade report | passed count must not drop, failed count must not rise |
+| New/changed tests green | run them individually | all green |
+| Golden-file diff | `git diff` on the golden directory | empty, or explained line by line |
+| Snapshot diff | `git diff` on `__snapshots__`/`.snap` | empty, or explained line by line |
+| Public API surface diff | Java: `japicmp`; Kotlin: `apiDump` | breaking changes must be documented in writing |
+| Build artifact diff | compare with `jar tf` / `unzip -l` | no unexpected file additions or removals |
+| Manual check of key business paths | actually run 1-2 core flows | behavior identical |
+| Final transitive dependency versions | `dependency:tree` / `npm ls` | no new vulnerabilities, no version conflicts |
 
-Kotlin 项目额外跑 `./gradlew apiCheck`（binary compatibility validator）—— Kotlin 生态拦截破坏性变更最有效的手段。
+Kotlin projects additionally run `./gradlew apiCheck` (binary compatibility validator) — the single most effective guard against breaking changes in the Kotlin ecosystem.
 
-**完成标准**：每个已升级依赖都有完整证据表，破坏性变更全部书面记录。
-
----
-
-## 阶段 7 · 报告
-
-输出 Markdown 表格 + 机器可读的 `dependency-upgrade-report.json`（项目、依赖、版本、状态、测试结果、commit hash）。
-
-表格列：依赖 | 旧 → 新 | 风险级别 | 风险原因(CVE/公告) | 改动的业务代码 | 新增/修改的测试 | 测试结果 | 状态
-
-另附三节：未能升级的依赖及原因 / 遗留风险 / 建议的后续动作。
-
-格式要求：用中文；表格 + 要点；**失败和跳过必须显式写出来**，不许只报成功项；每个结论附证据（命令输出 / 报告路径 / commit hash）。
-
-**完成标准**：报告已交付，含所有失败与跳过项，每项有证据。
+**Done when**: every upgraded dependency has a complete evidence table and every breaking change is documented in writing.
 
 ---
 
-## 硬性红线（违反即任务失败）
+## Phase 7 · Report
 
-1. 没有全绿基线，不许动任何依赖
-2. 一次只升一个依赖，失败立即回滚该次
-3. 禁止为了让测试变绿而修改测试断言（唯一例外：快照更新，且逐条 review + 书面说明；无法解释的差异 = 回滚）
-4. 禁止升级不在风险清单上的依赖
-5. 禁止在没写 characterization test 的情况下升级"裸奔"依赖
-6. 禁止在主工作区直接改，一律用 `git worktree` 隔离
-7. 工作区脏的项目一律跳过并报告，不要清理别人的未提交改动
-8. 升不动就报告，不要硬凑
-9. 不要动排除清单里的目录
-10. 每完成一个项目就汇报一次，不要攒到最后一次性交付
+Produce a Markdown table plus a machine-readable `dependency-upgrade-report.json` (project, dependency, versions, status, test results, commit hash).
+
+Table columns: Dependency | Old → New | Risk Level | Risk Reason (CVE/advisory) | Business Code Changed | Tests Added/Modified | Test Results | Status
+
+Add three more sections: dependencies that could not be upgraded and why / residual risks / recommended follow-up actions.
+
+Format requirements: written in the user's preferred language; tables plus bullet points; **failures and skips must be stated explicitly** — never report only the successes; every conclusion carries its evidence (command output / report path / commit hash).
+
+**Done when**: the report is delivered, it includes every failure and skip, and each one has evidence.
 
 ---
 
-## 参考文件
+## Hard Red Lines (violating any of these fails the task)
 
-- `references/local-projects.md` —— 项目清单模板、工具链基线、排除规则
-- `references/ecosystem-traps.md` —— 各生态命令速查、测试选型表、已知陷阱
+1. No green baseline → do not touch any dependency
+2. One dependency per round; a failure rolls that round back immediately
+3. Never modify test assertions to force green (the only exception is a snapshot update, reviewed line by line and documented in writing; an unexplainable difference means roll back)
+4. Never upgrade a dependency that is not on the risk list
+5. Never upgrade an "uncovered" dependency without writing a characterization test first
+6. Never edit in the main working tree — always isolate with `git worktree`
+7. Skip and report any project with a dirty working tree; do not clean up someone else's uncommitted changes
+8. If it cannot be upgraded, report it — do not force it
+9. Do not touch anything in the exclusion list
+10. Report after each project is finished; do not batch everything to the end
+
+---
+
+## Reference Files
+
+- `references/local-projects.md` — project inventory template, toolchain baseline, exclusion rules
+- `references/ecosystem-traps.md` — per-ecosystem commands, test selection table, known traps
